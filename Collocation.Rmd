@@ -1,0 +1,440 @@
+---
+title: "Collocation"
+author: "Jilung Hsieh"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set-up
+
+```{r loading-pkgs, include=FALSE}
+library(tidyverse)
+library(tidyr) 
+library(jiebaR)
+options(stringsAsFactors = F)
+options(scipen = 999)
+```
+
+# Data
+
+```{r loading-data}
+load("data/s3_watched.rda")
+Sys.setlocale(locale="zh_TW.UTF-8")
+```
+
+```{r initialize-jieba, include=FALSE}
+library(jiebaR)
+stopWords <- readRDS("../../R/lib/stopWords.rds")
+segment_not <- c("爸爸", "爸媽", "新手")
+watched <- c("爸爸","父親","老公","先生","丈夫","奶爸","寶爸","隊友",
+             "爹地","爸比","把拔","把鼻","老爸","另一半","拔拔",
+             "孩子的爸","孩子爸", "爸拔","他爸","她爸","新手爸","版爸",
+             "板爸","我家男人","當爸的","腦公","阿爸","人父","孩子的爹",
+             "孩子爹","老爹","外子","拔比","爸鼻","爸把","爸逼","爸咪",
+             "把爸","拔爸","爹低","帥爸","準爸","小孩爸","親爸","神爸",
+             "宅爸","瓶餵爸","寶寶的爸","孩的爸","女兒的爸")
+
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+
+watched <- c(watched, reserved)
+
+watched.str <- paste0(watched, collapse = "|")
+
+
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+
+cutter <- worker()
+tagger <- worker("tag")
+new_user_word(cutter, segment_not)
+new_user_word(cutter, watched)
+new_user_word(tagger, segment_not)
+new_user_word(tagger, watched)
+
+
+```
+
+# CONCORDANCE
+
+```{r}
+term1 <- "總是|總不|老是|經常|很少|一直|都|難得"
+term2 <- "覺得|希望|知道|認為|打算"
+
+pat <- paste0("(.{3,})(", term2, ")(.{3,})")
+
+s3.watched %>% 
+    filter(str_detect(sentence, pat)) %>%
+    mutate(prev = str_replace(sentence, pat, "\\1")) %>%
+    mutate(hits = str_replace(sentence, pat, "\\2")) %>% 
+    mutate(tail = str_replace(sentence, pat, "\\3")) %>% 
+    select(sentence, prev, hits, tail) %>%
+    filter(str_detect(prev, watched.str) | str_detect(tail, watched.str)) %>% View
+```
+
+# TOKENIZATION
+
+## Tokenized with POS
+
+```{r}
+unnested.pos <- s3.watched %>%
+    filter(str_detect(sentence, "隊友")) %>%
+    # mutate(group = if_else(str_detect(sentence, "神隊友|好隊友|好老公|好先生"), "神隊友", "豬隊友")) %>%
+    mutate(word = purrr::map(sentence, function(x)segment(x, tagger))) %>%
+    mutate(word = purrr::map(word, function(x)str_c(names(x), "_", x))) %>% 
+    unnest(word) %>%
+    separate(word, c("pos", "word"), sep = "_") %>%
+    filter(!(word %in% stopWords)) %>%
+    mutate(word = paste0(pos, "_", word))
+```
+
+# COLLOCATION
+
+```{r}
+word_count <- unnested.pos %>%
+    count(word, sort=T)
+word_del <- word_count %>%
+    filter(n <= 10)
+word_count_nopos <- word_count %>%
+    separate(word, c("pos", "word")) %>%
+    group_by(word) %>%
+    summarize(n = sum(n)) %>%
+    ungroup() %>%
+  mutate(px = n/sum(n))
+```
+
+## by `pairwise_count()`
+
+```{r}
+library(widyr)
+word_pairs <- unnested.pos %>%
+    group_by(word) %>%
+    filter(n() > 10) %>%
+    ungroup() %>%
+    pairwise_count(word, sid, sort = TRUE) %>%
+    separate(item1, c("pos1", "V1")) %>%
+    separate(item2, c("pos2", "V2")) %>%
+    filter(str_detect(V1, watched.str) | str_detect(V2, watched.str)) %>%
+    select(V1, V2, weight = n)
+```
+
+## by `pairwise_pmi()`
+
+以PMI的算法來說，部分只出現過一次的文字會獲得很高的PMI。
+
+```{r}
+library(widyr)
+word_pairs <- unnested.pos %>%
+    pairwise_pmi(word, sid, sort = TRUE) %>%
+    # filter(pmi > 0) %>%
+    # filter(pmi > mean(.$pmi) + 0.5*sd(.$pmi)) %>%
+    anti_join(word_del, c("item1"="word")) %>%
+    anti_join(word_del, c("item2"="word")) %>%
+    separate(item1, c("pos1", "V1")) %>%
+    separate(item2, c("pos2", "V2")) %>% 
+    filter(str_detect(V1, watched.str) | str_detect(V2, watched.str)) %>%
+    # filter(pos1 == "v" & pos2 == "n") %>%
+    select(V1, V2, weight = pmi)
+```
+
+```{r}
+word_pairs %>%
+    ggplot() + aes(weight) +
+    geom_density(fill = "royalblue", alpha=0.5, adjust=1/2) +
+    stat_ecdf(geom = "step", color="orangered") + 
+    theme_minimal()
+```
+
+## by `pairwise_cor()`
+
+Time-consumed! be careful!
+
+    # library(widyr)
+    # word_pairs <- unnested.pos %>%
+    #     pairwise_cor(word, sid, sort = TRUE) %>%
+    #     separate(item1, c("pos1", "V1")) %>%
+    #     separate(item2, c("pos2", "V2")) %>%
+    #     filter(!V1 %in% stopWords & !V2 %in% stopWords) %>%
+    #     filter(str_detect(V1, watched.str) | str_detect(V2, watched.str)) %>%
+    #     select(V1, V2, weight = correlation)
+
+## Comparing count and PMI
+
+```{r}
+
+pair_pmi <- unnested.pos %>%
+    pairwise_pmi(word, sid, sort = TRUE) %>%
+    mutate(V12 = paste0(item1, "_", item2))
+
+pair_pmi %>%
+    ggplot() + aes(pmi) +
+    geom_density(fill = "royalblue", alpha=0.5) +
+    stat_ecdf(geom = "step", color="orangered") + 
+    theme_minimal()
+
+pair_count <- unnested.pos %>%
+    pairwise_count(word, sid, sort = TRUE) %>%
+    mutate(V12 = paste0(item1, "_", item2))
+
+
+word_count <- unnested.pos %>%
+    count(word, sort=T)
+
+pair_joined <- pair_pmi %>% 
+    left_join(pair_count, by="V12") %>%
+    filter(n > 1) %>%
+    left_join(word_count %>% rename(n1 = n), by=c('item1.x'='word')) %>%
+    left_join(word_count %>% rename(n2 = n), by=c('item2.x'='word'))
+
+
+pair_joined %>%
+    ggplot() + aes(pmi) +
+    geom_density(fill = "royalblue", alpha=0.5, adjust=1/2) +
+    stat_ecdf(geom = "step", color="orangered") + 
+    theme_minimal()
+```
+
+```{r filtered-by-POS}
+word_pairs <- word_pairs %>%
+    filter(pos1 == "v" & pos2 == "n")
+
+```
+
+# BIGRAM-TRIGRAM
+
+```{r bigram}
+word_pairs <- unnested.pos %>%
+    mutate(w2 = lead(word, 1)) %>%
+    mutate(w3 = lead(word, 2)) %>%
+    drop_na() %>%
+    mutate(w12 = paste0(word, "_", w2)) %>%
+    mutate(w23 = paste0(w2, "_", w3)) %>%
+    mutate(w13 = paste0(word, "_", w3)) %>%
+    select(doc_id, sid, w12, w23, w13) %>%
+    gather(key = "key", value = "wp", 3:ncol(.)) %>%
+    separate(wp, c("w1pos", "w1", "w2pos", "w2"), sep="_") %>%
+    filter(paste0(w1pos, "_", w2pos) %in% c("a_n")) %>% 
+    filter(!w1 %in% stopWords & !w2 %in% stopWords) %>%
+    count(w1, w2) %>% arrange(desc(n)) %>% 
+    filter(n > 1) %>%
+    rename(V1 = w1, V2 = w2, weight = n) %>%
+    filter(V1 != V2)
+    # filter(w2 %in% c("神隊友", "豬隊友")) %>% View
+```
+
+```{r trigram}
+trigram <- unnested.pos %>%
+    rename(w1 = word) %>%
+    mutate(w2 = lead(w1, 1)) %>%
+    mutate(w3 = lead(w1, 2)) %>%
+    mutate(w4 = lead(w1, 3)) %>%
+    drop_na() %>%
+    mutate(w123 = paste0(w1, "_", w2, "_", w3)) %>%
+    mutate(w124 = paste0(w1, "_", w2, "_", w4)) %>%
+    mutate(w134 = paste0(w1, "_", w3, "_", w4)) %>%
+    mutate(w234 = paste0(w2, "_", w3, "_", w4)) %>%
+    select(doc_id, sid, w123, w124, w134, w234) %>%
+    gather(key = "key", value = "wp", 3:ncol(.)) %>%
+    separate(wp, c("pos1", "w1", "pos2", "w2", "pos3", "w3"), sep="_") %>%
+    filter(paste0(pos1, "_", pos2, "_", pos3) %in% c("n_a_n")) %>% 
+    filter(!w1 %in% stopWords & !w2 %in% stopWords & !w3 %in% stopWords) %>%
+    count(w1, w2, w3) %>% arrange(desc(n)) %>% 
+    filter(n > 1)
+    # filter(w2 %in% c("神隊友", "豬隊友")) %>% View
+```
+
+```{r bigram->PMI}
+pmi <- word_pairs %>%
+  filter(nchar(V1) + nchar(V2) > 2) %>%
+  left_join(word_count_nopos %>% select(word, px), c("V1"="word")) %>%
+  left_join(word_count_nopos %>% select(word, py=px), c("V2"="word")) %>%
+  mutate(pxy = weight/sum(weight)) %>%
+  mutate(pmi = pxy/(px*py)) %>% arrange(-desc(pmi))
+```
+
+# VIS
+
+```{r warning=FALSE}
+library(igraph)
+library(ggraph)
+
+# word_pairs %>%
+#     select(item1, item2, n) %>%
+#     ggplot(aes(n)) +
+#     geom_density()
+
+set.seed(2016)
+word_pairs %>%
+    slice(1:800) %>%
+    # filter(n > 8) %>%
+    graph_from_data_frame() %>%
+    ggraph(layout = "fr") +
+    geom_edge_link(aes(edge_alpha = weight), show.legend = FALSE) +
+    geom_node_point(color = "lightblue", alpha = 0.5, size = 2) +
+    geom_node_text(aes(label = name), repel = F, 
+                   family = "Heiti TC Light",
+                   check_overlap = F) +
+    theme_void()
+```
+
+## Reduce network
+
+```{r}
+toplot <- word_pairs %>%
+    arrange(desc(weight)) %>%
+    slice(1:1000)
+
+g <- graph.data.frame(toplot,directed = FALSE)  
+# word_count
+```
+
+## Reduce by vertex degree
+
+```{r}
+g <- delete_vertices(g, 
+                V(g)[degree(g) < 5])
+message("Edges: ", length(E(g)))
+message("Nodes: ", length(V(g)))
+```
+
+## Reduce only large components
+
+```{r}
+components <- igraph::clusters(g, mode="weak")
+biggest_cluster_id <- which.max(components$csize)
+# which.max(components$csize)
+# components$csize
+# biggest_cluster_id
+top3_break <- sort(unique(components$csize), decreasing = T)[1]
+biggest_cluster_id <- which(components$csize >=  top3_break)
+vert_ids <- V(g)[components$membership %in% biggest_cluster_id]
+g <- igraph::induced_subgraph(g, vert_ids)
+message("Edges: ", length(E(g)))
+message("Nodes: ", length(V(g)))
+
+```
+
+## Visualize by igraph
+
+```{r}
+l <- layout_with_kk(g)
+# l <- layout_with_mds(g)
+# l <- layout.fruchterman.reingold(g)
+# l <- layout_with_sugiyama(g)
+# l <- layout_with_fr(g)
+# l <- layout_with_lgl(g)
+# l <- layout_in_circle(g)
+# l <- layout_nicely(g)
+# V(g)$size = log(centralization.degree(g)$res + 1)
+V(g)$size <- data.frame(word=V(g)$name) %>%
+  left_join(word_count_nopos, by="word") %>% .$n
+V(g)$group =  ifelse(V(g)$name %in% watched, "watched", "other")
+
+E(g)$width = toplot$weight
+# hist(log(toplot$n))
+# l <- layout_with_kk(g)
+# l <- layout_with_mds(g)
+# l <- layout.fruchterman.reingold(g)
+
+nodeLabel = V(g)$name
+# E(g)$color =  unlist(lapply(sample(colors()[26:137], 16), function(i) rep(i, 9)))
+# png(filename="result.png", 4000, 2000)
+
+plot(g, vertex.label = V(g)$name,
+     edge.curved = 0.2,
+     vertex.label.cex = 0.8,
+     vertex.color = adjustcolor("SkyBlue2", alpha.f = .5),
+     vertex.size  = sqrt(V(g)$size)/10,
+     # vertex.size  = log(V(g)$size),
+     edge.arrow.size = 0, 
+     # xlim = c(-10,10),
+     layout = l,
+     edge.width = log10(E(g)$width-min(E(g)$width)) + 0.1,
+     # edge.width= log10(E(g)$weight),
+     vertex.label.family = 'Heiti TC Light',
+     edge.color = rgb(0.5,0.5,0.5,0.5))
+```
+
+# Networkd3
+
+**Cannot use reduced network NOW!**
+
+```{r}
+
+toplot <- word_pairs %>%
+    arrange(desc(weight)) %>%
+    slice(1:200)
+
+g <- graph.data.frame(toplot,directed = FALSE)  
+V(g)$size <- data.frame(word=V(g)$name) %>%
+  left_join(word_count_nopos, by="word") %>% .$n
+V(g)$group =  ifelse(V(g)$name %in% watched, "watched", "other")
+
+E(g)$width = toplot$weight
+
+
+library(networkD3)
+# V(g)$size
+# (scale(V(g)$size) + 1)*10
+# log1p(V(g)$size)
+
+d3.nodes <- data.frame(name = V(g)$name, 
+                       size = (scale(V(g)$size) + 1)*2,
+                       group=V(g)$group)
+
+d3.edges <- data.frame(from = match(toplot$V1, d3.nodes$name) - 1,
+                       to = match(toplot$V2, d3.nodes$name) - 1,
+                       my_width = as.integer(log10(E(g)$width)*10))
+
+# http://www.r-graph-gallery.com/253-custom-network-chart-networkd3/
+forceNetwork(Links = d3.edges, Nodes = d3.nodes, 
+             NodeID = "name", Group = "group",
+             Source = "from", Target = "to", 
+             
+             # -- custom nodes and labels
+             Nodesize = "size",
+             # Nodesize = 5,
+             # fontSize = "size",
+             fontSize = 20,
+             colourScale = JS("d3.scaleOrdinal(d3.schemeCategory10);"),
+             
+             # -- custom edges
+             Value="my_width",
+             linkWidth = networkD3::JS("function(d) { return d.value*d.value/10;}"),
+             linkDistance = networkD3::JS("function(d) { return 5/d.value/d.value;}"),
+             linkColour = "RoyalBlue",
+             charge = -10,
+             arrow = FALSE,
+             
+             # -- general variables
+             zoom = TRUE, legend = TRUE,
+             opacity=0.8, opacityNoHover = 0.8, 
+             bounded=TRUE, clickAction = NULL) %>%
+  saveNetwork(file="network.d3.html")
+system("open network.d3.html")
+```
+
+# Three.js
+
+```{r}
+library(threejs)
+g <- set_vertex_attr(g, "color", value = "#F1880088")
+# g <- set_vertex_attr(g, "opacity", value = "0.8")
+# g  <- set_edge_attr(g,"color", value = "#0000FF88")
+# g  <- set_edge_attr(g,"width", value = 1)
+g  <- set_edge_attr(g, "weight", value=0.1)
+graphjs(g,
+        # layout=layout_with_fr(g, dim=3), # default
+        vertex.size = 0.5,
+        vertex.label = V(g)$name,
+        edge.width = 1,
+        edge.alpha = 0.5,
+        # click=TRUE, 
+        repulsion=0.15,
+        bg="black",
+        fps=60)
+ 
+
+```

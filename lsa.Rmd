@@ -1,0 +1,172 @@
+---
+title: "LSA"
+author: "Jilung Hsieh"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    highlight: zenburn
+    fig_width: 8
+    fig_height: 4
+    fig_caption: yes
+    output_dir: "html"
+    df_print: tibble
+---
+
+# Tutorials
+
+-   <https://juliasilge.com/blog/sherlock-holmes-stm/>
+-   [RPubs - stm_course](https://rpubs.com/Rawrion/669023)
+
+# Setups
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loading-pkgs}
+library(tidyverse)
+library(tidytext)
+library(DT)
+options(stringsAsFactors = F)
+options(scipen = 999)
+
+```
+
+```{r loading-data}
+load("data/s3_watched.rda")
+Sys.setlocale(locale="zh_TW.UTF-8")
+```
+
+```{r initial-jieba}
+library(jiebaR)
+stopWords <- readRDS("data/stopWords.rds")
+segment_not <- c("爸爸", "爸媽", "新手")
+watched <- c("爸爸","父親","老公","先生","丈夫","奶爸","寶爸","隊友",
+             "爹地","爸比","把拔","把鼻","老爸","另一半","拔拔",
+             "孩子的爸","孩子爸", "爸拔","他爸","她爸","新手爸","版爸",
+             "板爸","我家男人","當爸的","腦公","阿爸","人父","孩子的爹",
+             "孩子爹","老爹","外子","拔比","爸鼻","爸把","爸逼","爸咪",
+             "把爸","拔爸","爹低","帥爸","準爸","小孩爸","親爸","神爸",
+             "宅爸","瓶餵爸","寶寶的爸","孩的爸","女兒的爸")
+
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+
+watched <- c(watched, reserved)
+
+watched.str <- paste0(watched, collapse = "|")
+
+
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+
+cutter <- worker()
+tagger <- worker("tag")
+new_user_word(cutter, segment_not) %>% invisible()
+new_user_word(cutter, watched) %>% invisible()
+new_user_word(tagger, segment_not) %>% invisible()
+new_user_word(tagger, watched) %>% invisible()
+```
+
+# Pre-processing
+
+```{r tokenization}
+
+unnested.df <- s3.watched %>%
+    filter(str_detect(sentence, "隊友")) %>%
+    mutate(word = purrr::map(s3, function(x)segment(x, cutter))) %>%
+    unnest(word) %>%
+    anti_join(stopWords) %>%
+    filter(!str_detect(word, "[a-zA-Z0-9]+")) %>%
+    filter(!is.na(word)) %>%
+    group_by(word) %>%
+    filter(n() > 10) %>%
+    ungroup() %>%
+    filter(nchar(word) > 1)
+```
+
+# LSA
+
+```{r tf-idf-testing}
+# unnested.df %>%
+#     count(doc_id, word) %>%
+#     spread(doc_id, n, fill=0) %>% head()
+
+word_tfidf <- unnested.df %>%
+   count(doc_id, word) %>%
+   bind_tf_idf(word,  doc_id, n)
+
+word_tfidf %>% head(50)
+```
+
+```{r tdm}
+# unnested.df %>%
+#     count(doc_id) %>%
+#     count(n) %>% arrange(desc(nn)) %>% invisible()
+
+tdm <- unnested.df %>%
+    count(doc_id, word) %>%
+    bind_tf_idf(word,  doc_id, n) %>%
+    group_by(doc_id) %>%
+    arrange(desc(tf_idf)) %>%
+    slice(1:30) %>%
+    ungroup() %>%
+    cast_tdm(document = doc_id, term = word, value = n)
+```
+
+```{r pca}
+pca <- prcomp(tdm, center = T, scale. = T)
+pca$x %>% as_tibble()
+plot(pca, type = "l")
+```
+
+```{r svd}
+tdm.svd = svd(tdm)
+# tibble(i = 1:500, d = tdm.svd$d[1:500]) %>%
+#   ggplot(aes(i,d)) +
+#   geom_point() + scale_x_log10() +
+#   ylim(0,20)+ xlim(40,500)+
+#   labs(title="Spectrum with CCA Scaling",  x="Dimension", y="Singular Value")
+```
+
+[RPubs - R筆記--(9)分群分析(Clustering)](https://rpubs.com/skydome20/R-Note9-Clustering)
+
+```{r clustering}
+# install.packages("factoextra")
+library(factoextra)
+cluster.res <- kmeans(pca$x[,1:10], 10, iter.max = 200) # time-consuming
+cluster.res <- kmeans(tdm.svd$u[,1:20], 10, nstart = 1234, iter.max = 200) # time-consuming
+
+fviz_cluster(cluster.res, data = pca$x,
+             font.family = "Heiti TC Light",
+             ggtheme = theme_minimal())
+
+fviz_cluster(cluster.res, data = tdm.svd$u,
+             font.family = "Heiti TC Light",
+             ggtheme = theme_minimal())
+
+fviz_nbclust(tdm.svd$u, kmeans, method = "wss")
+
+words <- names(cluster.res$cluster)
+for(i in 1:20){
+  print(paste0("---------------------clueter: ", i))
+  print(words[cluster.res$cluster==i])
+}
+```
+
+# Options(Using POSTS)
+
+```{r load-data}
+load("data/posts.df")
+```
+
+```{r unnest}
+unnested.df <- posts %>%
+    mutate(word = purrr::map(pcontent, function(x)segment(x, cutter))) %>%
+    unnest(word) %>%
+    anti_join(stopWords) %>%
+    filter(!str_detect(word, "[a-zA-Z0-9]+")) %>%
+    filter(!is.na(word)) %>%
+    group_by(word) %>%
+    filter(n() > 100) %>%
+    ungroup()
+```
