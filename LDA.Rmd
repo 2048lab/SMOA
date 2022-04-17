@@ -1,0 +1,444 @@
+---
+title: "LDA"
+author: "Jilung Hsieh"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    highlight: zenburn
+    fig_caption: yes
+    df_print: tibble
+    params:
+        output_dir:"html"
+---
+```{r}
+knitr::opts_chunk$set(echo = TRUE, cache = T)
+```
+
+
+# Introduction
+
+1.  Getting word tokens by `doc_term_count <- unnest()`
+2.  Building DocumentTermMatrix by `dtm <- tidytext::cast_dtm(doc_term_count, title, words, n)`
+3.  Getting word tokens by `word_token <- unnest()`
+4.  Building DocumentTermMatrix by `dtm <- tidytext::cast_dtm(word_token, title, words, n)`
+5.  Modeling by `dtm_lda <- topicmodels::LDA(dtm, k = 16, control = list(seed = 1234))`
+6.  Results
+    1.  Visualize word-topic probability by `dtm_topics <- tidy(dtm_lda, matrix = "beta")`
+    2.  Getting document-topic probability
+    3.  Building term network
+7.  Evaluation
+    1.  Calculating perplexity by different number of topics
+    2.  Evaluating by `library(ldatuning)`
+
+## Resource
+
+-   <https://www.tidytextmining.com/ngrams.html>
+-   <https://docs.google.com/presentation/d/13JZupGAV-tZt8qR9gf1uq339EQo8NpvOnVl7vORTo6g/edit?usp=sharing>
+
+# Set-ups
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(tidytext)
+library(jiebaR)
+library(lubridate)
+# devtools::install_github("bmschmidt/wordVectors")
+library(wordVectors)
+library(word2vec)
+library(tidyr) 
+options(scipen = 999)
+# " xcode-select --install"
+# install.packages("http://download.r-forge.r-project.org/src/contrib/tmcn_0.2-9.tar.gz", repos = NULL, type = "source")
+# library(tmcn)
+
+# install.packages("devtools")
+# devtools::install_github("qinwf/ropencc") # Convert S to Trad
+```
+
+```{r load-data}
+load("data/s3_watched.rda")
+Sys.setlocale(locale="zh_TW.UTF-8")
+```
+
+```{r initilize-jieba}
+library(jiebaR)
+stopWords <- readRDS("data/stopWords.rds")
+segment_not <- c("爸爸", "爸媽", "新手")
+watched <- c("爸爸","父親","老公","先生","丈夫","奶爸",
+             "寶爸","隊友","爹地","爸比","把拔","把鼻",
+             "老爸","另一半","拔拔", "孩子的爸","孩子爸",
+             "爸拔","他爸","她爸","新手爸","版爸", "板爸",
+             "我家男人","當爸的","腦公","阿爸","人父",
+             "孩子的爹","孩子爹","老爹","外子","拔比",
+             "爸鼻","爸把","爸逼","爸咪","把爸","拔爸",
+             "爹低","帥爸","準爸","小孩爸","親爸","神爸",
+             "宅爸","瓶餵爸","寶寶的爸","孩的爸","女兒的爸")
+
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+
+watched <- c(watched, reserved)
+
+watched.str <- paste0(watched, collapse = "|")
+
+
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+
+cutter <- worker()
+tagger <- worker("tag")
+new_user_word(cutter, segment_not)
+new_user_word(cutter, watched)
+new_user_word(tagger, segment_not)
+new_user_word(tagger, watched)
+```
+
+# Text-pre-processing
+
+```{r tokenization}
+unnested.df <- s3.watched %>%
+    filter(str_detect(sentence, "隊友")) %>%
+    mutate(word = purrr::map(s3, function(x)segment(x, cutter))) %>%
+    unnest(word) %>%
+    anti_join(stopWords) %>%
+    filter(!str_detect(word, "[a-zA-Z0-9]+")) %>%
+    filter(!is.na(word)) %>%
+    group_by(word) %>%
+    filter(n() > 5) %>%
+    ungroup() %>%
+    filter(nchar(word) > 1) %>%
+    filter(!word %in% c("隊友"))
+```
+
+```{r doc-term-count}
+doc_term_count <- unnested.df %>%
+    group_by(doc_id, word) %>%
+    filter(n() > 1) %>%
+    ungroup() %>%
+    count(doc_id, word)
+```
+
+-   `tidytext` 套件可以用來將`data.frame`轉成多種資料檢索或自然語言處理會用到的矩陣，例如`DocumentTermMatrix`、`TermDocumentMatrix`、或者`dgCMatrix`等等。這邊用來將`doc_term_count`
+
+```{r to-dtm}
+library(tidytext)
+dtm <- doc_term_count %>%
+    cast_dtm(doc_id, word, n)
+# dtm %>% View
+```
+
+# LDA
+
+```{r}
+library(topicmodels)
+dtm_lda <- LDA(dtm, k = 8, control = list(seed = 1234))
+dtm_lda4 <- LDA(dtm, k = 4, control = list(seed = 1234))
+```
+
+# Visual exploration
+
+## Word-topic probabilities
+
+```{r beta-k8}
+dtm_topics <- tidy(dtm_lda, matrix = "beta")
+
+top_terms <- dtm_topics %>%
+	group_by(topic) %>%
+	top_n(10, beta) %>%
+	ungroup() %>%
+	arrange(topic, -beta)
+
+top_terms %>%
+	mutate(term = reorder_within(term, beta, topic)) %>%
+	ggplot(aes(beta, term, fill = factor(topic))) +
+	geom_col(show.legend = FALSE) +
+	facet_wrap(~ topic, scales = "free") +
+    scale_y_reordered() +
+    theme_minimal() + 
+	theme(axis.text.y=element_text(family="Heiti TC Light"))
+```
+
+Note. Using `recode()` to change facet names (topics)
+
+```{r beta-k4}
+dtm_topics_4 <- tidy(dtm_lda4)
+
+top_terms_4 <- dtm_topics_4 %>%
+	group_by(topic) %>%
+	top_n(20, beta) %>%
+	ungroup() %>%
+	arrange(topic, -beta)
+# View(top_terms_4)
+
+top_terms_4 %>%
+	mutate(term = reorder_within(term, beta, topic)) %>%
+    mutate(topic = recode(topic, 
+                          "1"="家庭分工",
+                          "2"="分娩生產",
+                          "3"="日常育兒",
+                          "4"="婆婆月子豬隊友")) %>%
+	ggplot(aes(beta, term, fill = factor(topic))) +
+	geom_col(show.legend = FALSE) +
+	facet_wrap(~ topic, scales = "free") +
+    scale_y_reordered() +
+    theme_minimal() + 
+	theme(title = element_text(family="Heiti TC Light"),
+	      text = element_text(family="Heiti TC Light"),
+	      axis.text.y=element_text(family="Heiti TC Light"))
+
+```
+
+
+
+## Evaluation
+
+```{r}
+perplexity(dtm_lda)
+perplexity(dtm_lda4)
+# [1] 348.7432
+# [1] 592.8917
+
+
+# Example of entroty 
+-(0.6*log2(0.6) + 0.4*log2(0.4))
+-(0.9*log2(0.9) + 0.1*log2(0.1))
+# [1] 0.9709506
+# [1] 0.4689956
+```
+
+```{r}
+library(tidyverse)
+n_topics <- c(4, 8, 12, 16, 20, 24, 32, 48, 64)
+
+# perplex <- sapply(n_topics, function(k){
+# 	lda.temp <- LDA(dtm, k =k, control = list(seed = 1109))
+# 	perplexity(lda.temp)
+# })
+
+topicsbyk <- list()
+s_time <- Sys.time()
+for(i in 1:length(n_topics)){
+    message(i, "\t", n_topics[i], "\t", Sys.time() - s_time)
+    topicsbyk[[i]] <- list()
+    topicsbyk[[i]]$k <- n_topics[i]
+    lda.temp <- LDA(dtm, k = n_topics[i], control = list(seed = 1109))
+    topicsbyk[[i]]$model <- lda.temp
+    topicsbyk[[i]]$perplex <- perplexity(lda.temp)
+}
+
+
+perplex <- topicsbyk %>% 
+    purrr::map(function(x){x$perplex}) %>%
+    unlist()
+
+tibble(k=n_topics, perplex=perplex) %>%
+	ggplot(aes(k, perplex)) +
+	geom_point() +
+	geom_line() +
+	labs(title = "Evaluating LDA topic models",
+		 subtitle = "Optimal number of topics (smaller is better)",
+		 x = "Number of topics",
+		 y = "Perplexity")
+```
+
+## Comparing topic1 and topic 2
+
+```{r}
+library(tidyr)
+
+beta_spread <- dtm_topics %>%
+	mutate(topic = paste0("topic", topic)) %>%
+	spread(topic, beta) %>%
+	select(term, topic1, topic2) %>%
+	filter(topic1 > .001 | topic2 > .001) %>%
+	mutate(logratio = log2(topic1 / topic2)) %>%
+	arrange(desc(logratio))
+
+# beta_spread
+
+beta_spread %>%
+	group_by(logratio > 0) %>%
+	top_n(20, abs(logratio)) %>%
+	ungroup() %>%
+	mutate(term = reorder(term, logratio)) %>%
+	ggplot(aes(term, logratio, fill = logratio < 0)) +
+	geom_col() +
+	coord_flip() +
+	ylab("Topic2/Topic1 log ratio") +
+	scale_fill_manual(name = "", labels = c("topic2", "topic1"),
+					  values = c("red", "lightblue")) + 
+	theme(axis.text.y=element_text(colour="black", family="Heiti TC Light"))
+
+```
+
+# Document-topic probabilities
+
+```{r}
+doc_topics <- tidy(dtm_lda, matrix = "gamma") %>%
+	spread(topic, gamma)
+
+dtm_lda@gamma %>% head()
+# doc_topics
+```
+
+## Visualizing document-topic
+
+```{r raster}
+tidy(dtm_lda, matrix = "gamma") %>% 
+    mutate(topic = str_pad(topic, 2, pad = "0")) %>%
+    # mutate(gamma = log10(gamma)) %>%
+	# spread(topic, gamma)
+    ggplot() + aes(topic, document, fill = gamma) + 
+    geom_raster()
+```
+
+```{r}
+tidy(dtm_lda, matrix = "gamma") %>% 
+    mutate(topic = str_pad(topic, 2, pad = "0")) %>%
+    group_by(document) %>%
+    summarize(sd = sd(gamma),
+              max = max(gamma)) %>%
+    ungroup() %>%
+    ggplot() + aes(sd, max) + 
+    geom_density_2d_filled() + 
+    # geom_density2d() + 
+    theme_minimal()
+```
+
+
+# LDAVis
+
+-   <https://ldavis.cpsievert.me/reviews/reviews.html>
+
+-   <https://github.com/m-clark/topic-models-demo/blob/master/topic-model-demo.Rmd>
+
+-   <https://gist.github.com/christophergandrud/00e7451c16439421b24a>
+
+-   <http://christophergandrud.blogspot.tw/2015/05/a-link-between-topicmodels-lda-and.html>
+
+```{r  eval=FALSE, include=FALSE}
+# install.packages("LDAvis")
+library(LDAvis)
+
+m <- cast_sparse(doc_term_count, doc_id, word, n)
+# dim(m)
+# class(m)
+nword_per_doc <- doc_term_count %>%
+    group_by(doc_id) %>%
+    summarize(total = sum(n)) %>%
+    ungroup() %>% .$total %>% unlist()
+
+??createJSON
+# temp_frequency <- inspect(dtm)
+# freq_matrix <- data.frame(ST = colnames(temp_frequency),
+#                           Freq = colSums(temp_frequency))
+# colSums(dtm)
+
+shinyJSON = createJSON(
+    phi = exp(dtm_lda@beta), 
+    theta = dtm_lda@gamma, 
+    doc.length = nword_per_doc,
+    vocab = dtm_lda@terms,
+    term.frequency = colSums(as.matrix(m)))
+serVis(shinyJSON)
+```
+
+# PCA on LDA Results
+
+```{r  eval=FALSE, include=FALSE}
+# m <- t(dtm_lda@gamma)
+m <- dtm_lda@beta
+beta.pca <- prcomp(m, center = T, scale. = T)
+plot(beta.pca, type = "l")
+
+beta.pca$x %>%
+	as_tibble() %>%
+	ggplot(aes(PC2)) + geom_density()
+
+beta.pca$x %>% # data projected in pca space
+	as_tibble() %>%
+	ggplot(aes(PC1, PC2)) + 
+    geom_density2d()
+
+```
+
+```{r  eval=FALSE, include=FALSE}
+beta.pca$x %>% as_tibble() %>%
+    select(PC1, PC2) %>%
+    ggplot() + aes(PC1, PC2) + 
+    geom_point()
+
+
+topic.stat <- tidy(dtm_lda, matrix = "gamma") %>% 
+    group_by(topic) %>%
+    summarise(gamma_sum = sum(gamma)) %>%
+    ungroup()
+
+
+topic.stat %>%
+    bind_cols(beta.pca$x %>% 
+                  as_tibble() %>%
+                  select(x=PC1, y=PC2)) %>%
+    ggplot() +
+    geom_point(aes(x, y, size = gamma_sum), alpha = 0.5) + 
+    geom_text(aes(x, y, label = topic))
+```
+
+# Acknowledgement
+
+-   This page is derived in part from "[Tidy Text Mining with R](https://www.tidytextmining.com/)" and licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 3.0 United States License.
+-   This page is derived in part from "[What is a good explanation of Latent Dirichlet Allocation?](https://www.quora.com/What-is-a-good-explanation-of-Latent-Dirichlet-Allocation)"
+-   This page is dervied in part from the course "[Computing for Social Science](http://cfss.uchicago.edu/fall2016/syllabus.html)" in uChicago.
+-   <https://chengjunwang.com/zh/post/cn/cn_archive/2013-09-27-topic-modeling-of-song-peom/>
+-   <http://www.bernhardlearns.com/2017/05/topic-models-lda-and-ctm-in-r-with.html>
+
+# Term network
+
+```{r}
+# install.packages("widyr")
+library(widyr)
+word_pairs <- unnested.df %>%
+    pairwise_count(word, doc_id, sort = TRUE)
+
+word_corr <- unnested.df %>%
+    group_by(word) %>%
+    filter(n() > 20) %>%
+    pairwise_cor(word, doc_id, sort = TRUE)
+    
+    
+```
+
+```{r  eval=FALSE, include=FALSE}
+# install.packages("ggraph")
+library(igraph)
+library(ggraph)
+word_pairs %>%
+    ggplot(aes(n)) +
+    geom_density()
+
+set.seed(2016)
+word_pairs %>%
+  filter(n > 10) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = F, family = "Heiti TC Light") +
+  theme_void()
+```
+
+```{r  eval=FALSE, include=FALSE}
+word_corr %>%
+    ggplot(aes(correlation)) +
+    geom_density()
+
+set.seed(2016)
+word_corr %>%
+  filter(correlation > .75) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = F, family = "Heiti TC Light") +
+  theme_void()
+```

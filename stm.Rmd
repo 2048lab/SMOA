@@ -22,6 +22,7 @@ output:
 # Setups
 
 ```{r loading-pkgs}
+knitr::opts_chunk$set(echo = TRUE, cache = T)
 pkgs <- c("LDAvis", "tidyverse", "jiebaR", "igraph", "stm", "wordcloud")
 install.packages(pkgs[!pkgs %in% installed.packages()]) 
 library(tidyverse)

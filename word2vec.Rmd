@@ -31,6 +31,9 @@ vec.bin -> word2vec
     | terms     <- summary(model, "vocabulary")
     | embedding <- as.matrix(model)
 
+```{r}
+knitr::opts_chunk$set(echo = TRUE, cache = T)
+```
 
 
 ```{r load data}
