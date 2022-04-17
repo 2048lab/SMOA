@@ -166,11 +166,14 @@ filtered.df %>%
     mutate(perc = 隊友/n) %>%
     arrange(-隊友) %>% # head(10)
     ggplot() + aes(n, 隊友, label=label) +
-    geom_point() + geom_text(aes(family = "Heiti TC Light")) + 
+    geom_point() + 
+    geom_smooth(method='lm', formula= y~x) + 
+    geom_text(aes(family = "Heiti TC Light")) + 
     scale_x_log10() + 
     scale_y_log10() + 
     theme(title = element_text(family = "Heiti TC Light"),
-          text = element_text(family = "Heiti TC Light"))
+          text = element_text(family = "Heiti TC Light")) + 
+    theme_minimal()
 ```
 
 
