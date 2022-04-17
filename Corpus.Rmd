@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
 ```
 
 # Setups
@@ -25,30 +25,41 @@ watched.parade <- c("2018-10-27", "2017-10-27")
 ```
 
 ```{r jieba}
-stopWords <- readRDS("../../R/lib/stopWords.rds")
-segment_not <- c("蔡英文")
-watched <- c("爸爸","父親","老公","先生","丈夫","奶爸","寶爸","隊友",
-             "爹地","爸比","把拔","把鼻","老爸","另一半","拔拔",
-             "孩子的爸","孩子爸", "爸拔","他爸","她爸","新手爸","版爸",
-             "板爸","我家男人","當爸的","腦公","阿爸","人父","孩子的爹",
-             "孩子爹","老爹","外子","拔比","爸鼻","爸把","爸逼","爸咪",
-             "把爸","拔爸","爹低","帥爸","準爸","小孩爸","親爸","神爸",
+library(jiebaR)
+stopWords <- readRDS("data/stopWords.rds")
+segment_not <- c("爸爸", "爸媽", "新手")
+watched <- c("爸爸","父親","老公","先生","丈夫","奶爸",
+             "寶爸","隊友","爹地","爸比","把拔","把鼻",
+             "老爸","另一半","拔拔", "孩子的爸","孩子爸",
+             "爸拔","他爸","她爸","新手爸","版爸", "板爸",
+             "我家男人","當爸的","腦公","阿爸","人父",
+             "孩子的爹","孩子爹","老爹","外子","拔比",
+             "爸鼻","爸把","爸逼","爸咪","把爸","拔爸",
+             "爹低","帥爸","準爸","小孩爸","親爸","神爸",
              "宅爸","瓶餵爸","寶寶的爸","孩的爸","女兒的爸")
-cutter <- worker()
+
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+watched <- c(watched, reserved)
 watched.str <- paste0(watched, collapse = "|")
+reserved <- c("神隊友", "豬隊友", "好隊友", "好先生", "好爸爸", "好老公")
+
+cutter <- worker()
+tagger <- worker("tag")
 new_user_word(cutter, segment_not)
 new_user_word(cutter, watched)
-
+new_user_word(tagger, segment_not)
+new_user_word(tagger, watched)
 ```
 
 ```{r loading-data}
-load("../pttdata/boards/BabyMother_20220305.rda")
+load("../../R_PTT/pttdata/boards/BabyMother_20220305.rda") 
+# posts:150,083, comments:5,399,030
 Sys.setlocale("LC_ALL", "C") # Change to C to parse time correctly
 
 # Testing of resolve R timestamp
-# Sys.getlocale()
-# allp.df$ptime[[1]] 
-# as.POSIXct(strptime(allp.df$ptime[[1]], "%a %b %e %X %Y"))
+Sys.getlocale()
+allp.df$ptime[[1]] 
+as.POSIXct(strptime(allp.df$ptime[[1]], "%a %b %e %X %Y"))
 # Sys.setlocale("LC_ALL", "C") # Change to C to parse time correctly
 
 
@@ -68,26 +79,26 @@ filtered.df <- allp.df %>%
     mutate(poster = str_replace(poster, "(.+?) \\(.*\\)", "\\1")) %>%
     mutate(nchar = nchar(pcontent)) %>%
     mutate(fathering = if_else(str_detect(pcontent, watched.str), "father", "none")) %>%
-    mutate(doc_id = str_replace(plink, ".*/([a-zA-Z\\.0-9]+)\\..*", "\\1"))
+    mutate(doc_id = str_replace(plink, ".*/([a-zA-Z\\.0-9]+)\\..*", "\\1")) %>%
+    extract(ptitle, "label", "\\[(.+?)\\]", remove = F)
 
+Sys.setlocale(locale="zh_TW.UTF-8")
+filtered.df %>%
+    count(label, sort = T)
 
-glimpse(filtered.df) %>% head %>% View
+filtered.df <- filtered.df %>% # posts: 35309
+    filter(year(ptime) >= 2014) %>%
+    filter(str_detect(pcontent, watched.str)) %>%
+    filter(label != "公告")
 
+# save(filtered.df, file="private/filtered(fathering).rda")
 ```
 
 ```{r filter-by-timeline}
-filtered.df <- filtered.df %>%
-    filter(year(ptime) >= 2014) %>%
-    filter(str_detect(pcontent, watched.str)) %>%
-    filter(!str_detect(pcontent, "\\[公告\\]"))
 
 filtered.df %>%
     ggplot() + aes(x=as.POSIXct(ptime), fill=fathering) + 
     geom_density(alpha=0.5)
-
-table(is.na(allp.df$ptime))
-
-as.Date("2015-09-01")
 
 
 library(ggrepel)
@@ -111,7 +122,60 @@ filtered.df %>%
 
 ```
 
-```{r dump-to-sheets}
+```{r}
+# a <- tibble(content=c("我是豬隊友，他是神隊友", "測試看看"), doc_id=1:2) %>%
+#     mutate(query = str_extract_all(content, "神隊友|豬隊友"))
+
+label_count <- filtered.df %>%
+    count(label)
+
+filtered.df %>% 
+    mutate(teammate = str_extract_all(pcontent, "隊友")) %>%
+    unnest(teammate) %>%
+    select(doc_id, label, teammate) %>%
+    count(label, teammate) %>%
+    pivot_wider(names_from = teammate, values_from = n, values_fill = 0) %>%
+    left_join(label_count) %>%
+    mutate(perc = 隊友/n) %>%
+    arrange(-隊友) %>% View
+
+
+filtered.df %>% 
+    mutate(teammate = str_extract_all(pcontent, "神隊友|豬隊友")) %>%
+    unnest(teammate) %>%
+    select(doc_id, label, teammate) %>%
+    count(label, teammate) %>%
+    pivot_wider(names_from = teammate, values_from = n, values_fill = 0) %>%
+    left_join(label_count) %>%
+    mutate(both = 神隊友 + 豬隊友) %>%
+    mutate(perc = both/n) %>%
+    arrange(-both) %>% View
+
+
+    
+```
+## teammate
+```{r teammate}
+filtered.df %>% 
+    mutate(teammate = str_extract_all(pcontent, "隊友")) %>%
+    unnest(teammate) %>%
+    select(doc_id, label, teammate) %>%
+    count(label, teammate) %>%
+    pivot_wider(names_from = teammate, values_from = n, values_fill = 0) %>%
+    left_join(label_count) %>%
+    mutate(perc = 隊友/n) %>%
+    arrange(-隊友) %>% # head(10)
+    ggplot() + aes(n, 隊友, label=label) +
+    geom_point() + geom_text(aes(family = "Heiti TC Light")) + 
+    scale_x_log10() + 
+    scale_y_log10() + 
+    theme(title = element_text(family = "Heiti TC Light"),
+          text = element_text(family = "Heiti TC Light"))
+```
+
+
+
+```{r dump-to-sheets, eval=FALSE, include=FALSE}
 library(googlesheets4)
 ss <- gs4_create("fathering", sheets = slice(father.df, 1:3))
 

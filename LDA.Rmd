@@ -7,9 +7,6 @@ output:
     toc: yes
     highlight: zenburn
     fig_caption: yes
-    df_print: tibble
-    params:
-        output_dir:"html"
 ---
 ```{r}
 knitr::opts_chunk$set(echo = TRUE, cache = T)
@@ -57,9 +54,24 @@ options(scipen = 999)
 # devtools::install_github("qinwf/ropencc") # Convert S to Trad
 ```
 
+
 ```{r load-data}
 load("data/s3_watched.rda")
+
 Sys.setlocale(locale="zh_TW.UTF-8")
+s3.watched %>%
+    select(doc_id, ptime) %>%
+    filter(!duplicated(.)) %>%
+    mutate(time_interval = floor_date(ptime, unit = "month")) %>%
+    count(time_interval) %>%
+    ggplot() + aes(time_interval, n) + 
+    geom_col() + theme_minimal()
+
+s3.watched %>%
+    extract(ptitle, "label", "\\[(.+?)\\]", remove = F) %>%
+    select(doc_id, label) %>%
+    distinct(doc_id, label) %>%
+    count(label, sort = T) %>% head(50)
 ```
 
 ```{r initilize-jieba}
