@@ -52,3 +52,4 @@ rsconnect/
 private/
 data/.DS_Store
 .DS_Store
+.vscode/settings.json

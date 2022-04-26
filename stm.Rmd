@@ -19,10 +19,14 @@ output:
 -   <https://juliasilge.com/blog/sherlock-holmes-stm/>
 -   [RPubs - stm_course](https://rpubs.com/Rawrion/669023)
 
-# Setups
+## STM
+Reference: https://juliasilge.com/blog/evaluating-stm/
+
+### Setups
 
 ```{r loading-pkgs}
-knitr::opts_chunk$set(echo = TRUE, cache = T)
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
 pkgs <- c("LDAvis", "tidyverse", "jiebaR", "igraph", "stm", "wordcloud")
 install.packages(pkgs[!pkgs %in% installed.packages()]) 
 library(tidyverse)
@@ -65,13 +69,11 @@ new_user_word(tagger, segment_not)
 new_user_word(tagger, watched)
 ```
 
-# Pre-processing
+### Pre-processing
 
-## Tokenization
-
-```{r}
+```{r tokenization}
 unnested.df <- s3.watched %>%
-    # filter(str_detect(sentence, "隊友")) %>%
+    filter(str_detect(sentence, "隊友")) %>%
     mutate(word = purrr::map(s3, function(x)segment(x, cutter))) %>%
     unnest(word) %>%
     anti_join(stopWords) %>%
@@ -83,9 +85,8 @@ unnested.df <- s3.watched %>%
     filter(nchar(word) > 1)
 ```
 
-## Building dfm
 
-```{r dfm}
+```{r building-dfm}
 library(tidytext)
 # library(quanteda)
 dfm <- unnested.df %>%
@@ -93,13 +94,15 @@ dfm <- unnested.df %>%
     cast_dfm(doc_id, word, n) #tidytext
 ```
 
-# STM
+### STM
+
+Generated topic model can be saved as rda file for furture use
 
 ```{r stm}
 library(stm)
 topic_model <- stm(dfm, K = 12, verbose = F)
-save(topic_model, file="output/tm02_s3_k12.rda")
-load("output/tm02_s3_k12.rda")
+# save(topic_model, file="output/tm02_s3_k12.rda")
+# load("output/tm02_s3_k12.rda")
 ```
 
 ```{r summary-of}
@@ -107,18 +110,22 @@ summary(topic_model)
 # print(topic_model)
 ```
 
-```{r topic-corr}
-library(igraph)
-mod.out.corr <- topicCorr(topic_model)
+Using wordcloud for visualization often leads to misunderstanding due to the number of letters in the word.
+
+```{r wordcloud}
 # install.packages("wordcloud")
-
 cloud(topic_model, topic = 7, scale = c(4,.5), family = "Heiti TC Light")
-
-plot(mod.out.corr)
-mod.out.corr
 ```
 
-## LDAvis
+
+```{r topic-corr-plot}
+library(igraph)
+mod.out.corr <- topicCorr(topic_model)
+plot(mod.out.corr)
+# mod.out.corr
+```
+
+### LDAvis
 
 See Sievert, C., & Shirley, K. (2014). LDAvis: A method for visualizing and interpreting topics. *Proceedings of the Workshop on Interactive Language Learning, Visualization, and Interfaces*. Proceedings of the Workshop on Interactive Language Learning, Visualization, and Interfaces, Baltimore, Maryland, USA. <https://doi.org/10.3115/v1/w14-3110>
 
@@ -128,12 +135,121 @@ See Sievert, C., & Shirley, K. (2014). LDAvis: A method for visualizing and inte
 
 2.  relevance(term w \| topic t) = λ \* p(w \| t) + (1 - λ) \* p(w \| t)/p(w); see Sievert & Shirley (2014). Lift: p(w\|t)/p(w) = p(w and t)/(p(w)p(t))
 
+# Visualization
+
 ```{r toLDAvis}
 stm.doc <- quanteda::convert(dfm, to = "stm")
 toLDAvis(topic_model, stm.doc$documents)
 ```
 
+# Validating
+
+
 ```{r}
+library(furrr)
+plan(multiprocess)
+many_models <- tibble(K = c(8, 16, 24, 32, 64)) %>%
+  mutate(topic_model = future_map(K, ~stm(dfm, K = ., verbose = F)))
+```
+
+```{r}
+heldout <- make.heldout(dfm)
+
+k_result <- many_models %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, dfm),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, dfm),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+k_result
+```
+```{r}
+k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that a good number of topics would be around 60")
+```
+```{r}
+k_result %>%
+  select(K, exclusivity, semantic_coherence) %>%
+  filter(K %in% c(16, 24, 64)) %>%
+  unnest() %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semantic_coherence, exclusivity, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "Semantic coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence",
+       subtitle = "Models with fewer topics have higher semantic coherence for more topics, but lower exclusivity")
+```
+
+# Exploring model
+```{r beta matrix}
+td_beta <- tidy(topic_model)
+td_beta %>% filter(topic==1) %>% arrange(-beta) %>% head(10)
+```
+```{r gamma matrix}
+td_gamma <- tidy(topic_model, matrix = "gamma", document_names = rownames(dfm))
+td_gamma
+```
+
+```{r}
+
+top_terms <- td_beta %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(6, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest()
+
+gamma_terms <- td_gamma %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+gamma_terms %>%
+  ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(hjust = 0, nudge_y = 0.0005, size = 3,
+            family = "Heiti TC Light") +
+  coord_flip() + 
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, max(gamma_terms$gamma)+0.1),
+                     labels = scales::percent_format()) + 
+  theme(plot.title = element_text(size = 16,
+                                  family="Heiti TC Light"),
+        plot.subtitle = element_text(size = 13)) + 
+  theme_minimal()
+```
+```{r message=FALSE, warning=FALSE}
+gamma_terms %>%
+  select(topic, gamma, terms) 
+```
+
+
+# Other
+
+```{r label-topics, eval=FALSE, include=FALSE}
 # topics <- c("隊友", "生產經驗", "Mothering", "大寶",
 #             "先生", "夫妻之間", "神隊友", "好隊友", "豬隊友", 
 #             "育兒溝通", "婆婆", "爸爸")
