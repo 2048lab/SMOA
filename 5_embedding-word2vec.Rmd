@@ -24,7 +24,7 @@ vec.bin -> word2vec
     | embedding <- as.matrix(model)
 
 ```{r}
-knitr::opts_chunk$set(echo = TRUE, cache = T)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
@@ -86,7 +86,7 @@ new_user_word(tagger, watched)
 # Tokenization
 ```{r tokenization}
 unnested.df <- s3.watched %>%
-    # filter(str_detect(sentence, "隊友")) %>%
+    filter(str_detect(sentence, "隊友")) %>%
     mutate(word = purrr::map(s3, function(x)segment(x, cutter))) %>%
     unnest(word) %>%
     anti_join(stopWords) %>%
@@ -109,10 +109,6 @@ id2text <- unnested.df %>%
 id2text %>%
     .$text %>%
 	write("text_data.txt")
-
-
-    
-    
 ```
 
 # EMBEDDINGS
@@ -158,7 +154,9 @@ plot(model, method = "tsne")
 
 ## *Plot by word2vec
 ```{r}
-model <- read.word2vec("vec.bin")
+
+library(word2vec)
+model <- word2vec::read.word2vec("vec.bin")
 terms <- summary(model, "vocabulary")
 embedding <- as.matrix(model)
 ```
@@ -188,14 +186,23 @@ ggplot(toplot, aes(x = x, y = y, label = word)) +
 # SIMILARITY
 
 Selecting top 2 dimension as word features
-```{r}
-model@.Data[,c(1,2)] %>% as.tibble() %>%
-    bind_cols(rownames(model@.Data)) %>% 
-model[[c("compared", "traditional")]] 
+```{r eval=FALSE, include=FALSE}
+model <- wordVectors::read.binary.vectors(filename = "private/vec.bin")
+# model@.Data[,c(1,2)] %>% as.tibble() %>% 
+#     bind_cols(rownames(model@.Data)) %>%
+#     model[[c("老公", "爸爸")]] 
+
+w2v_tbl <- model@.Data %>% as_tibble() %>%
+    bind_cols(tibble(word = rownames(model@.Data))) %>%
+    select(word, everything()) %>%
+    right_join(selected %>% select(word))
+
+reduced <- tsne(w2v_tbl[-1], max_iter = 500)
+
 ```
 
-```{r}
-nearest_to(model,model[["災民"]])
+```{r eval=FALSE, include=FALSE}
+nearest_to(model,model[["爸爸"]])
 nearest_to(model,model[["政府"]])
 nearest_to(model,model[["老天"]])
 model %>% closest_to(~ "颱風" - "老天" ,5)
@@ -239,7 +246,7 @@ digraph G {
 ")
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 # library(rword2vec)
 rword2vec::bin_to_txt("vec.bin","vec.text")
 
