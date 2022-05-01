@@ -11,6 +11,32 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r concept}
+DiagrammeR::grViz("
+digraph G {
+  graph [layout = dot, rankdir=TD]
+  node [shape = rect,  height=0, fontname='Helvetica', width=2]
+  node [style = filled, fillcolor='honeydew1']
+  edge [fontname='Courier']
+  
+    corpus[fillcolor='khaki3']
+    corpus -> {ngram_8, dtlist}
+    dtlist -> dtcount
+    dtcount -> unigramProb
+    ngram_8[labels='quanteda::\ntokens_ngrams()']
+    ngram_8 -> skipgram[label='unnest()']
+    skipgram -> skipgram_ttpair[label='pairwise_count()']
+    normalized_ttpair[shape='octagon', fillcolor='pink1']
+    {unigramProb, skipgram_ttpair} -> normalized_ttpair
+    normalized_ttpair -> pmi_matrix[label='cast_sparse(w1, w2, pmi)']
+    sim_crossprod[shape=rect, fillcolor=lightblue1]
+    svd_pmi[fillcolor=yellow]
+    pmi_matrix -> svd_pmi -> sim_crossprod
+}
+")
+```
+
+
 # Julia's v
 
 ```{r}

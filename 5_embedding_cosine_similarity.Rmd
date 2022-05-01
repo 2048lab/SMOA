@@ -19,32 +19,51 @@ options(stringsAsFactors = FALSE)
 ```{r concept}
 DiagrammeR::grViz("
 digraph G {
-  graph [layout = dot]
-  node [shape = box, style = filled, margin=0.1, height=0.1, fontname='Helvetica']
+  graph [layout = dot, rankdir=TD]
+  node [shape = rect,  height=0, fontname='Helvetica', width=3]
+  node [style = filled, fillcolor='honeydew1']
   edge [fontname='Courier']
-
-  subgraph cluster1 { 
-    node [fillcolor = pink1]
-    co1 [label = 'term2term-pair \n(ngram)']
-    co2 [label = 'term-term-count']
-    co3 [label = 'term-term-matrix']
-    co1 -> co2 -> co3
-    label = 'ngram'
-    color='dimgrey'
-  }
-  subgraph cluster2 {
-    node [fillcolor = darkseagreen1]
-    dr1 [label = 'SVD']
-    dr2 [label = 't-SNE']
+  
+  corpus[fillcolor='khaki3']
+  subgraph cluster1 {
     label = 'Dimension-Reduction'
     color='dimgrey'
+    node [fillcolor = yellow, shape=rect]
+    {svd; tsne}
   }
-  corpus [label = 'Corpus (text)', fillcolor=skyblue]
-  corpus -> b1[label='tokenization()\n unnest()']
-  b1 [label = 'doc-term-list', fillcolor = Beige]
-  b1 -> co1
-  viz1 [label = 'plot()', fillcolor = gold1]
-  co3 -> {dr1, dr2} -> viz1
+  
+  subgraph cluster2{
+    label = 'wordVector'
+    color='dimgrey'
+    node [fillcolor = grey, shape=rect]
+    tokens -> wordVector[label='wordVectors::\ntrain_word2vec()']
+  }
+  
+  viz1 [label = 'plot()', fillcolor = palegreen1]
+  sim_cosine[label='Cosine Similarity', shape= rect, fillcolor=lightblue1]
+  
+  corpus -> dtlist[label='tokenization()\n unnest()']
+  dtlist -> ttpair -> ttcount -> ttmatrix -> {svd, tsne} -> viz1
+  ttmatrix -> sim_cosine
+  
+  dtlist -> tokens
+  wordVector -> tsne
+
+  dtlist -> dtcount
+  subgraph cluster3{
+    label='skipgram-tidy'
+    dtcount -> unigramProb
+    ngram_8[labels='quanteda::\ntokens_ngrams()']
+    ngram_8 -> skipgram[label='unnest()']
+    skipgram -> skipgram_ttpair[label='pairwise_count()']
+    normalized_ttpair[shape='octagon', fillcolor='pink1']
+    {unigramProb, skipgram_ttpair} -> normalized_ttpair
+    normalized_ttpair -> pmi_matrix[label='cast_sparse(w1, w2, pmi)']
+    sim_crossprod[shape=rect, fillcolor=lightblue1]
+    svd_pmi[fillcolor=yellow]
+    pmi_matrix -> svd_pmi -> sim_crossprod
+  }
+  corpus -> ngram_8
 }
 ")
 ```

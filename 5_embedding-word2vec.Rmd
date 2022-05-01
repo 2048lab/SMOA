@@ -3,15 +3,7 @@ title: "word2vec"
 author: "Jilung Hsieh"
 date: "`r Sys.Date()`"
 output: 
-  html_document: 
-    toc: yes
-    highlight: zenburn
-    fig_width: 8
-    fig_height: 4
-    fig_caption: yes
-    df_print: tibble
-    params:
-        output_dir:"html"
+  html_document
 ---
 
 
@@ -222,7 +214,30 @@ model %>% closest_to(~ "颱風" - "老天" ,5)
 * `rword2vec` is another package for word2vec model
 * Install `rword2vec` to convert binary bin to text file for clustering by `devtools::install_github("mukul13/rword2vec")`
 
-
+## Diagram testing
+- https://graphviz.org/doc/info/shapes.html
+```{r concept}
+DiagrammeR::grViz("
+digraph G {
+  graph [layout = dot, rankdir=TD]
+  node [shape = rect,  height=0, fontname='Helvetica', width=3]
+  node [style = filled, fillcolor='honeydew1']
+  edge [fontname='Courier']
+  
+  corpus[fillcolor='khaki3']
+  corpus -> dtlist[label='tokenization()\n unnest()']
+  subgraph cluster0{
+    label='wordVector'
+    node [fillcolor='pink1']
+    dtlist -> tokens
+    tokens -> wordVector[label='wordVectors::\ntrain_word2vec()']
+    wordVector -> tsne
+  }
+  viz1 [label = 'plot()', fillcolor = palegreen1]
+  tsne -> viz1
+}
+")
+```
 
 ```{r}
 # library(rword2vec)
