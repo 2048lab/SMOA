@@ -180,13 +180,27 @@ model = train_word2vec("text_data.txt", output="vec.bin",
 
 # reduced by PCA
 
-# reduced by tsne
-
 ```{r}
 model <- wordVectors::read.binary.vectors(filename = "vec.bin")
 w2v_tbl <- model@.Data %>% as_tibble() %>%
     bind_cols(tibble(word = rownames(model@.Data))) %>%
     select(word, everything())
+
+beta.pca <- prcomp(w2v_tbl[-1], center = T, scale. = T)
+
+w2v_tbl %>% select(word) %>%
+    bind_cols( beta.pca$x %>% as.data.frame() %>% select(1:2)) %>%
+    filter(word %in% highlight) %>%
+    ggplot() + aes(PC1, PC2) +
+    geom_point(shape="n") +
+    geom_text(aes(label = word), alpha=0.8) + theme_bw()
+
+
+```
+
+# reduced by tsne
+
+```{r}
 library(tsne)
 reduced <- tsne(w2v_tbl[-1], max_iter = 500)
 
