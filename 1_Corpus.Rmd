@@ -239,7 +239,7 @@ save(paragraph.df, file="paragraph.rda")
 # --- SEPERATION ---
 
 ```{r}
-load("paragraph.rda")
+
 
 
 paragraph.cleaned <- paragraph.df %>%
@@ -306,3 +306,25 @@ s3.watched %>%
     select(ptitle, sentence, s3) %>% head(100) %>% View
 
 ```
+
+--- EDA ---
+```{r}
+# load("private/paragraph.rda")
+library(tidyverse)
+fathers <- paragraph.df %>%
+    filter(str_detect(sentence, "我老婆|我太太")) %>% select(poster, sentence) %>% View
+    count(poster, plink, sort = T) %>%
+    group_by(poster) %>%
+    mutate(npost = n()) %>%
+    ungroup()
+
+sentences.father <- fathers %>%
+    filter(n + npost > 10) %>%
+    select(poster) %>%
+    left_join(paragraph.df, by = "poster")
+
+sentences.father %>%
+    filter(!duplicated(plink)) %>% select(poster, ptitle) %>% View
+    filter(!str_detect(pcontent, "我老婆|我太太")) %>% View
+```
+

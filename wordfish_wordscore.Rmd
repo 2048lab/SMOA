@@ -1,0 +1,231 @@
+---
+title: "WordFish Testing"
+author: "Jilung Hsieh"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+options(scipen = 999)
+```
+
+```{r}
+require(quanteda)
+require(quanteda.textmodels)
+# install.packages("quanteda.textmodels")
+require(quanteda.textplots)
+# install.packages("quanteda.textplots")
+
+tmod_wf <- textmodel_wordfish(dfm, dir = c(6, 5))
+```
+
+```{r eval=FALSE, include=FALSE}
+par(family = "STKaiti")
+textplot_scale1d(tmod_wf, margin = "features")
+```
+
+# Conventional methods
+
+## WordScore
+
+```{r}
+
+# docs n=14
+dfmat <- dfm(data_corpus_irishbudget2010)
+
+
+##  specify the most left and right doc
+(refscores <- c(rep(NA, 4), 1, -1, rep(NA, 8)))
+
+# Model
+tmod1 <- textmodel_wordscores(dfmat, y = refscores, smooth = 1)
+
+
+# plot estimated document positions
+textplot_scale1d(predict(tmod1, se.fit = TRUE),
+                 groups = docvars(data_corpus_irishbudget2010, 
+                                  "party"))
+```
+
+```{r}
+# plot estimated word positions
+highlight <- c("government", "global", "children",
+                                 "bank", "economy", 
+                                 "the", "citizenship",
+                                 "productivity", "deficit", "minister", "have", "our", "budget")
+textplot_scale1d(tmod1, 
+                 highlighted = highlight)
+```
+
+## WordFish
+
+```{r}
+## wordfish
+tmod2 <- textmodel_wordfish(dfmat, dir = c(6,5))
+```
+
+```{r}
+# plot estimated document positions
+textplot_scale1d(tmod2)
+
+textplot_scale1d(tmod2, groups = docvars(data_corpus_irishbudget2010, "party"))
+```
+
+```{r}
+# plot estimated word positions
+textplot_scale1d(tmod2, margin = "features",
+                 highlighted = highlight)
+
+## correspondence analysis
+tmod3 <- textmodel_ca(dfmat)
+# plot estimated document positions
+textplot_scale1d(tmod3, margin = "documents",
+                 groups = docvars(data_corpus_irishbudget2010, "party"))
+```
+
+# TDM + PCA
+
+```{r}
+df <- data_corpus_irishbudget2010 %>% as.data.frame() %>% 
+    rownames_to_column()
+names(df) <- c('doclabel', 'text')
+
+unnested <- df %>%
+    mutate(text = str_replace_all(text, "&#x27;|&quot;|&#x2F;", "'"),  
+           text = str_replace_all(text, "<a(.*?)>", " "),           
+           text = str_replace_all(text, "&gt;|&lt;|&amp;", " "),    
+           text = str_replace_all(text, "&#[:digit:]+;", " "),      
+           text = str_replace_all(text, "<[^>]*>", " "),            
+           doc_id = row_number()) %>%
+    unnest_tokens(word, text) %>%
+    group_by(word) %>%
+    filter(n() > 5) %>%
+    ungroup()
+
+tcount <- unnested %>%
+    count(word, doc_id) %>%
+    # group_by(word) %>%
+    # filter(n() > 1) %>%
+    # ungroup() %>%
+    group_by(word) %>%
+    summarize(n = sum(n)) %>%
+    ungroup()
+
+tdm <- unnested %>%
+    count(word, doc_id) %>%
+    # group_by(word) %>%
+    # filter(n() > 1) %>%
+    # ungroup() %>%
+    mutate(n = log10(n+1)) %>%
+    spread(doc_id, n, fill=0)
+```
+
+## PCA
+
+```{r}
+beta.pca <- prcomp(tdm %>% select(-word), center = T, scale. = T)
+plot(beta.pca, type = "l")
+
+beta.pca$x %>%
+	as_tibble() %>%
+	ggplot(aes(PC1)) + geom_density()
+
+
+beta.pca$x %>%
+	as_tibble() %>%
+	ggplot(aes(PC2)) + geom_density()
+
+
+beta.pca$x %>% # data projected in pca space
+	as_tibble() %>%
+	ggplot(aes(PC1, PC2)) + 
+    geom_density2d()
+```
+
+```{r}
+tcount %>%
+    bind_cols( beta.pca$x %>% as.data.frame() %>% select(1:2)) %>%
+    filter(word %in% highlight) %>%
+    # mutate(colors=ifelse(word %in% highlight, "black", "grey")) %>% 
+    ggplot() + aes(PC2, n) +
+    # geom_point(shape="n") + 
+    geom_text(aes(label = word), alpha=0.8) +
+    scale_y_log10() + theme_bw()
+    
+```
+
+# word2vec
+
+```{r}
+id2text <- unnested %>% 
+    select(doc_id, word) %>%
+	group_by(doc_id) %>%
+	summarise(text = paste(word, collapse = " ")) %>%
+	ungroup()
+
+id2text %>%
+    .$text %>%
+	write("text_data.txt")
+
+library(wordVectors)
+model = train_word2vec("text_data.txt", output="vec.bin",
+                       threads = 4, vectors = 300,
+                       window =5, min_count = 12,
+                       iter=10, force=TRUE)
+
+# plot(model, method = "tsne")
+```
+
+# reduced by PCA
+
+# reduced by tsne
+
+```{r}
+model <- wordVectors::read.binary.vectors(filename = "vec.bin")
+w2v_tbl <- model@.Data %>% as_tibble() %>%
+    bind_cols(tibble(word = rownames(model@.Data))) %>%
+    select(word, everything())
+library(tsne)
+reduced <- tsne(w2v_tbl[-1], max_iter = 500)
+
+reduced %>% as.data.frame() %>% 
+    bind_cols(w2v_tbl %>% select(word)) %>%
+    filter(word %in% highlight) %>%
+    ggplot() + aes(V1, V2) +
+    geom_text(aes(label = word)) + 
+    theme_bw()
+```
+
+## Reduced by umap
+
+```{r}
+library(word2vec)
+model <- word2vec::read.word2vec("vec.bin")
+terms <- summary(model, "vocabulary")
+embedding <- as.matrix(model)
+
+library(uwot)
+viz <- umap(embedding, n_neighbors = 2, n_threads = 2)
+
+library(ggplot2)
+library(ggrepel)
+df  <- data.frame(word = rownames(embedding), 
+                  xpos = rownames(embedding), 
+                  x = viz[, 1], y = viz[, 2], 
+                  stringsAsFactors = FALSE)
+toplot <- df %>%
+    filter(word %in% highlight)
+```
+
+```{r}
+ggplot(toplot, aes(x = x, y = y, label = word)) + 
+    geom_point(alpha=0.5, color="skyblue") + 
+    geom_text_repel(family="Heiti TC Light") + 
+    labs(title = "word2vec using UMAP")
+```
+
+```{r}
+pca <- 
+```

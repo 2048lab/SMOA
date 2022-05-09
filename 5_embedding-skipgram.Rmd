@@ -11,7 +11,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r concept}
+```{r}
 DiagrammeR::grViz("
 digraph G {
   graph [layout = dot, rankdir=TD]

@@ -90,6 +90,9 @@ unnested.df <- s3.watched %>%
 library(tidytext)
 # library(quanteda)
 dfm <- unnested.df %>%
+  group_by(doc_id) %>%
+  filter(n() > 10 & n() < 15) %>%
+  ungroup() %>%
     count(doc_id, word, sort = TRUE) %>%
     cast_dfm(doc_id, word, n) #tidytext
 ```
