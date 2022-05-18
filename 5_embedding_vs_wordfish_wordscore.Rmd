@@ -8,6 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(tidytext)
 options(scipen = 999)
 ```
 
@@ -18,12 +19,12 @@ require(quanteda.textmodels)
 require(quanteda.textplots)
 # install.packages("quanteda.textplots")
 
-tmod_wf <- textmodel_wordfish(dfm, dir = c(6, 5))
+# tmod_wf <- textmodel_wordfish(dfm, dir = c(6, 5))
 ```
 
 ```{r eval=FALSE, include=FALSE}
-par(family = "STKaiti")
-textplot_scale1d(tmod_wf, margin = "features")
+# par(family = "STKaiti")
+# textplot_scale1d(tmod_wf, margin = "features")
 ```
 
 # Conventional methods
@@ -34,7 +35,7 @@ textplot_scale1d(tmod_wf, margin = "features")
 
 # docs n=14
 dfmat <- dfm(data_corpus_irishbudget2010)
-
+# data_corpus_irishbudget2010 %>% as.data.frame() %>% View
 
 ##  specify the most left and right doc
 (refscores <- c(rep(NA, 4), 1, -1, rep(NA, 8)))
@@ -178,7 +179,7 @@ model = train_word2vec("text_data.txt", output="vec.bin",
 # plot(model, method = "tsne")
 ```
 
-# reduced by PCA
+## reduced by PCA
 
 ```{r}
 model <- wordVectors::read.binary.vectors(filename = "vec.bin")
@@ -198,7 +199,7 @@ w2v_tbl %>% select(word) %>%
 
 ```
 
-# reduced by tsne
+## reduced by tsne
 
 ```{r}
 library(tsne)
